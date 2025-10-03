@@ -85,7 +85,7 @@ export default class Publisher {
   async loadAllDependencies() {
     try {
       if (
-        !document.querySelector('script[src="../polyfills/MSTP_polyfill.js"]')
+        !document.querySelector('script[src*="MSTP_polyfill.js"]')
       ) {
         await new Promise((resolve, reject) => {
           const script = document.createElement("script");

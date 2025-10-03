@@ -10,10 +10,6 @@ import { readFileSync } from "fs";
 // Read package.json for version and metadata
 const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
 
-// Environment variables
-const isDev = process.env.NODE_ENV === "development";
-const isProd = process.env.NODE_ENV === "production";
-
 // Banner for built files
 const banner = `/**
  * ${pkg.name} v${pkg.version}
@@ -28,30 +24,28 @@ const banner = `/**
 const baseConfig = {
   input: "src/index.js",
   external: [], // No external dependencies since we want a standalone bundle
+  
+  // Disable code splitting for UMD builds
+  manualChunks: undefined,
+  
   plugins: [
-    // Copy static files in development
-    ...(isDev
-      ? [
-          copy({
-            targets: [
-              { src: "demo/**/*", dest: "dist/demo" },
-              { src: "README.md", dest: "dist/" },
-              { src: "package.json", dest: "dist/" },
-            ],
-          }),
-        ]
-      : []),
+    // Copy static files
+    copy({
+      targets: [
+        { src: "src/opus_decoder/**/*", dest: "dist/opus_decoder" },
+        { src: "src/raptorQ/**/*", dest: "dist/raptorQ" },
+        { src: "src/polyfills/**/*", dest: "dist/polyfills" },
+        { src: "src/workers/**/*", dest: "dist/workers" },
+        { src: "package.json", dest: "dist/" },
+      ],
+    }),
 
     // Replace environment variables
     replace({
       preventAssignment: true,
       values: {
         __VERSION__: JSON.stringify(pkg.version),
-        __DEV__: isDev,
-        __PROD__: isProd,
-        "process.env.NODE_ENV": JSON.stringify(
-          process.env.NODE_ENV || "development"
-        ),
+        "process.env.NODE_ENV": JSON.stringify("production"),
       },
     }),
 
@@ -91,138 +85,71 @@ const baseConfig = {
   ],
 };
 
-// Development configuration
-// const devConfig = {
-//   ...baseConfig,
-//   output: {
-//     file: "dist/ermis-classroom.js",
-//     format: "umd",
-//     name: "ErmisClassroom",
-//     banner,
-//     sourcemap: true,
-//     globals: {},
-//   },
-//   watch: {
-//     include: "src/**",
-//     exclude: "node_modules/**",
-//   },
-// };
-
-// Production configurations
-// const prodConfigs = [
-//   // UMD build
-//   {
-//     ...baseConfig,
-//     output: {
-//       file: "dist/ermis-classroom.js",
-//       format: "umd",
-//       name: "ErmisClassroom",
-//       banner,
-//       sourcemap: true,
-//       globals: {},
-//     },
-//     plugins: [...baseConfig.plugins],
-//   },
-
-//   // UMD minified build
-//   {
-//     ...baseConfig,
-//     output: {
-//       file: "dist/ermis-classroom.min.js",
-//       format: "umd",
-//       name: "ErmisClassroom",
-//       banner,
-//       sourcemap: true,
-//       globals: {},
-//     },
-//     plugins: [
-//       ...baseConfig.plugins,
-//       terser({
-//         format: {
-//           comments: /^!/,
-//           preamble: banner,
-//         },
-//         compress: {
-//           drop_console: true,
-//           drop_debugger: true,
-//           pure_funcs: ["console.log", "console.info", "console.debug"],
-//         },
-//       }),
-//     ],
-//   },
-
-//   // ES module build
-//   {
-//     ...baseConfig,
-//     output: {
-//       file: "dist/ermis-classroom.esm.js",
-//       format: "es",
-//       banner,
-//       sourcemap: true,
-//     },
-//     plugins: [...baseConfig.plugins],
-//   },
-
-//   // CommonJS build
-//   {
-//     ...baseConfig,
-//     output: {
-//       file: "dist/ermis-classroom.cjs.js",
-//       format: "cjs",
-//       banner,
-//       sourcemap: true,
-//       exports: "default",
-//     },
-//     plugins: [...baseConfig.plugins],
-//   },
-// ];
-
-// Export configuration based on environment
-// let config;
-
-// if (isDev) {
-//   config = devConfig;
-// } else if (isProd) {
-//   config = prodConfigs;
-// } else {
-//   // Default to single UMD build
-//   config = {
-//     ...baseConfig,
-//     output: {
-//       file: "dist/ermis-classroom.js",
-//       format: "umd",
-//       name: "ErmisClassroom",
-//       banner,
-//       sourcemap: true,
-//       globals: {},
-//     },
-//   };
-// }
-
-// ...existing code...
-
-// export default config;
-
-export default {
-  ...baseConfig,
-  output: {
-    dir: "dist",
-    format: "es", // hoặc "cjs"
-    sourcemap: true,
-    banner,
+// Multiple build configurations for different module formats
+const buildConfigs = [
+  // ES Module build - single file to match package.json
+  {
+    ...baseConfig,
+    output: {
+      file: "dist/ermis-classroom.esm.js",
+      format: "es",
+      banner,
+      sourcemap: true,
+      inlineDynamicImports: true,
+    },
   },
-  plugins: [...baseConfig.plugins],
-};
 
-// export default {
-//   input: "src/index.js",
-//   output: {
-//     dir: "dist",
-//     format: "es", // hoặc "cjs"
-//     sourcemap: true,
-//     banner,
-//   },
-//   plugins: [
-//     // ...plugins như cũ
-//   ],
-// };
+  // UMD build - single file
+  {
+    ...baseConfig,
+    output: {
+      file: "dist/ermis-classroom.js",
+      format: "umd",
+      name: "ErmisClassroom",
+      banner,
+      sourcemap: true,
+      globals: {},
+      exports: "named",
+      inlineDynamicImports: true,
+    },
+  },
+
+  // UMD minified build - single file
+  {
+    ...baseConfig,
+    output: {
+      file: "dist/ermis-classroom.min.js",
+      format: "umd",
+      name: "ErmisClassroom",
+      banner,
+      sourcemap: true,
+      globals: {},
+      inlineDynamicImports: true,
+    },
+    plugins: [
+      ...baseConfig.plugins,
+      terser({
+        compress: {
+          drop_console: true,
+        },
+        mangle: true,
+      }),
+    ],
+  },
+
+  // CommonJS build - single file
+  {
+    ...baseConfig,
+    output: {
+      file: "dist/ermis-classroom.cjs.js",
+      format: "cjs", 
+      banner,
+      sourcemap: true,
+      exports: "auto",
+      inlineDynamicImports: true,
+    },
+  },
+];
+
+// Export configuration
+export default buildConfigs;
