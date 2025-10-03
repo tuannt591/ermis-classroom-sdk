@@ -18,7 +18,6 @@ class ErmisClient extends EventEmitter {
         `https://${config.host || "daibo.ermis.network:9999"}/meeting`,
       webtpUrl:
         config.webtpUrl || "https://daibo.ermis.network:4455/meeting/wt",
-      autoSaveCredentials: config.autoSaveCredentials !== false,
       reconnectAttempts: config.reconnectAttempts || 3,
       reconnectDelay: config.reconnectDelay || 2000,
       debug: config.debug || false,
@@ -39,13 +38,6 @@ class ErmisClient extends EventEmitter {
       connectionStatus: "disconnected", // 'disconnected', 'connecting', 'connected', 'failed'
     };
 
-    // Storage interface (can be overridden for different environments)
-    this.storage = config.storage || {
-      getItem: (key) => localStorage?.getItem(key),
-      setItem: (key, value) => localStorage?.setItem(key, value),
-      removeItem: (key) => localStorage?.removeItem(key),
-    };
-
     // Media configuration
     this.mediaConfig = {
       host: this.config.host,
@@ -63,7 +55,6 @@ class ErmisClient extends EventEmitter {
     };
 
     this._setupEventHandlers();
-    this._attemptAutoLogin();
   }
 
   /**
@@ -88,7 +79,6 @@ class ErmisClient extends EventEmitter {
 
       // Get authentication token
       const tokenResponse = await this.apiClient.getDummyToken(userId);
-      //   const tokenResponse = await this.apiClient.refreshToken(userId);
 
       // Set authentication in API client
       this.apiClient.setAuth(tokenResponse.access_token, userId);
@@ -100,11 +90,6 @@ class ErmisClient extends EventEmitter {
         authenticatedAt: Date.now(),
       };
       this.state.isAuthenticated = true;
-
-      // Save credentials if enabled
-      if (this.config.autoSaveCredentials) {
-        this._saveCredentials();
-      }
 
       this._setConnectionStatus("connected");
       this.emit("authenticated", { user: this.state.user });
@@ -135,9 +120,6 @@ class ErmisClient extends EventEmitter {
       if (this.state.currentRoom) {
         await this.state.currentRoom.leave();
       }
-
-      // Clear credentials
-      this._clearCredentials();
 
       // Reset state
       this.state.user = null;
@@ -602,42 +584,6 @@ class ErmisClient extends EventEmitter {
   }
 
   /**
-   * Attempt automatic login with saved credentials
-   */
-  async _attemptAutoLogin() {
-    if (!this.config.autoSaveCredentials) {
-      return;
-    }
-
-    try {
-      const savedUserId = this.storage.getItem("ermis_user_id");
-      const savedToken = this.storage.getItem("ermis_token");
-
-      if (savedUserId && savedToken) {
-        this.apiClient.setAuth(savedToken, savedUserId);
-
-        // Verify token is still valid by making a test call
-        await this.apiClient.listRooms(1, 1);
-
-        this.state.user = {
-          id: savedUserId,
-          token: savedToken,
-          authenticatedAt: Date.now(),
-        };
-        this.state.isAuthenticated = true;
-        this._setConnectionStatus("connected");
-
-        this.emit("autoLoginSuccess", { userId: savedUserId });
-        this._debug("Auto-login successful:", savedUserId);
-      }
-    } catch (error) {
-      // Token might be expired, clear saved credentials
-      this._clearCredentials();
-      this._debug("Auto-login failed:", error.message);
-    }
-  }
-
-  /**
    * Attempt to reconnect
    */
   async _attemptReconnect() {
@@ -666,34 +612,6 @@ class ErmisClient extends EventEmitter {
 
     this.emit("reconnectionFailed");
     this._debug("All reconnection attempts failed");
-  }
-
-  /**
-   * Save user credentials
-   */
-  _saveCredentials() {
-    if (!this.state.user) return;
-
-    try {
-      this.storage.setItem("ermis_user_id", this.state.user.id);
-      this.storage.setItem("ermis_token", this.state.user.token);
-      this._debug("Credentials saved");
-    } catch (error) {
-      this._debug("Failed to save credentials:", error);
-    }
-  }
-
-  /**
-   * Clear saved credentials
-   */
-  _clearCredentials() {
-    try {
-      this.storage.removeItem("ermis_user_id");
-      this.storage.removeItem("ermis_token");
-      this._debug("Credentials cleared");
-    } catch (error) {
-      this._debug("Failed to clear credentials:", error);
-    }
   }
 
   /**
