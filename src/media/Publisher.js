@@ -12,7 +12,6 @@ export default class Publisher extends EventEmitter {
     if (!options.publishUrl) {
       throw new Error("publishUrl is required");
     }
-    // SDK now only works in stream output mode
 
     // Configuration
     this.publishUrl = options.publishUrl;
@@ -21,9 +20,7 @@ export default class Publisher extends EventEmitter {
 
     // Video configuration
     this.currentConfig = {
-      // codec: "hev1.1.0.L90.b0",
       codec: "avc1.640c34",
-      // codec: "avc1.42E01E",
       width: options.width || 1280,
       height: options.height || 720,
       framerate: options.framerate || 30,
@@ -42,25 +39,21 @@ export default class Publisher extends EventEmitter {
     this.audioProcessor = null;
     this.videoProcessor = null;
     this.webTransport = null;
-    this.webtransportWriter = null;
-    this.webtransportReader = null;
     this.isChannelOpen = false;
-    this.mediaConfigSent = false;
-    this.videoMetadataReady = false;
-    this.audioConfig = null;
-    this.videoConfig = null;
-    this.videoDescription = null;
     this.sequenceNumber = 0;
     this.isPublishing = false;
 
     this.cameraEnabled = true;
     this.micEnabled = true;
+    this.hasCamera = options.hasCamera !== undefined ? options.hasCamera : true;
+    this.hasMic = options.hasMic !== undefined ? options.hasMic : true;
 
     // Callbacks
     this.onStatusUpdate =
       options.onStatusUpdate || ((message, isError) => console.log(message));
     this.onStreamStart = options.onStreamStart || (() => {});
     this.onStreamStop = options.onStreamStop || (() => {});
+    this.onServerEvent = options.onServerEvent || ((event) => {});
 
     // Initialize modules
     this.wasmInitialized = false;
@@ -69,13 +62,49 @@ export default class Publisher extends EventEmitter {
     this.initAudioRecorder = null;
     this.WasmEncoder = null;
 
-    this.onServerEvent = options.onServerEvent || ((event) => {});
+    // Stream management
+    this.publishStreams = new Map(); // key: channelName, value: {writer, reader, configSent, config}
+    this.videoEncoders = new Map();
+    this.eventStream = null; // Dedicated event stream
 
-    // Video encoder
-    this.videoEncoder = new VideoEncoder({
-      output: this.handleVideoChunk.bind(this),
-      error: (e) => this.onStatusUpdate(`Encoder error: ${e.message}`, true),
-    });
+    this.subStreams = [
+      {
+        name: "high",
+        width: 1280,
+        height: 720,
+        bitrate: 800_000,
+        framerate: 30,
+        channelName: "cam_720p",
+      },
+      // {
+      //   name: "low",
+      //   width: 854,
+      //   height: 480,
+      //   bitrate: 500_000,
+      //   framerate: 30,
+      //   channelName: "cam_360p",
+      // },
+      {
+        name: "low",
+        width: 640,
+        height: 360,
+        bitrate: 400_000,
+        framerate: 30,
+        channelName: "cam_360p",
+      },
+      {
+        name: "screen",
+        width: 1920,
+        height: 1080,
+        bitrate: 2_000_000,
+        framerate: 30,
+        channelName: "screen_share_1080p",
+      },
+      {
+        name: "microphone",
+        channelName: "mic_48k",
+      },
+    ];
   }
 
   async init() {
@@ -260,58 +289,238 @@ export default class Publisher extends EventEmitter {
     this.onStatusUpdate(`${this.streamType} stream ready`);
   }
 
+  initVideoEncoders() {
+    this.subStreams.forEach((subStream) => {
+      if (!subStream.channelName.startsWith("mic")) {
+        console.log(`Setting up encoder for ${subStream.name}`);
+        const encoder = new VideoEncoder({
+          output: (chunk, metadata) =>
+            this.handleVideoChunk(
+              chunk,
+              metadata,
+              subStream.name,
+              subStream.channelName
+            ),
+          error: (e) =>
+            this.onStatusUpdate(
+              `Encoder ${subStream.name} error: ${e.message}`,
+              true
+            ),
+        });
+
+        this.videoEncoders.set(subStream.name, {
+          encoder,
+          channelName: subStream.channelName,
+          config: {
+            codec: this.currentConfig.codec,
+            width: subStream.width,
+            height: subStream.height,
+            bitrate: subStream.bitrate,
+            framerate: this.currentConfig.framerate,
+            latencyMode: "realtime",
+            hardwareAcceleration: "prefer-hardware",
+          },
+          metadataReady: false,
+          videoDecoderConfig: null,
+        });
+      }
+    });
+  }
+
   async setupConnection() {
     this.webTransport = new WebTransport(this.publishUrl);
     await this.webTransport.ready;
     console.log("WebTransport connected to server");
 
+    await this.createEventStream();
+
+    for (const subStream of this.subStreams) {
+      if (!subStream.channelName.startsWith("screen")) {
+        await this.createBidirectionalStream(subStream.channelName);
+      }
+    }
+
+    this.isChannelOpen = true;
+    this.onStatusUpdate(
+      "WebTransport connection established with event stream and media streams"
+    );
+  }
+
+  async createEventStream() {
     const stream = await this.webTransport.createBidirectionalStream();
     const readable = stream.readable;
     const writable = stream.writable;
 
-    this.webtransportWriter = writable.getWriter();
-    this.webtransportReader = readable.getReader();
-    console.log("WebTransport bidirectional stream established");
-    this.onStatusUpdate("WebTransport connection established");
+    const writer = writable.getWriter();
+    const reader = readable.getReader();
 
-    setInterval(() => {
+    this.eventStream = { writer, reader };
+
+    console.log("WebTransport event stream established");
+
+    const initData = new TextEncoder().encode("meeting_control");
+    await this.sendOverEventStream(initData);
+
+    // Setup reader cho event stream
+    this.setupEventStreamReader(reader);
+
+    await this.sendPublisherState();
+
+    const workerInterval = new Worker("polyfills/intervalWorker.js");
+    workerInterval.postMessage({ interval: 1000 });
+    let lastPingTime = Date.now();
+
+    workerInterval.onmessage = (e) => {
       const ping = new TextEncoder().encode("ping");
-      if (this.isChannelOpen && this.webtransportWriter) {
-        this.sendOverWebTransportStream(ping);
+      this.sendOverEventStream(ping);
+      if (Date.now() - lastPingTime > 1200) {
+        console.warn("Ping delay detected, connection may be unstable");
       }
-    }, 500);
+      lastPingTime = Date.now();
+    };
 
+    // setInterval(() => {
+    //   const ping = new TextEncoder().encode("ping");
+    //   this.sendOverEventStream(ping);
+    //   console.log("Ping sent to server");
+    // }, 500);
+  }
+
+  setupEventStreamReader(reader) {
     (async () => {
       try {
         while (true) {
-          const { value, done } = await this.webtransportReader.read();
+          const { value, done } = await reader.read();
           if (done) {
-            console.log("🔌 Bi-directional stream closed by server");
+            console.log("Event stream closed by server");
             break;
           }
           if (value) {
             const msg = new TextDecoder().decode(value);
-            if (msg === "pong") {
-              continue; // Ignore pong responses
-            }
-            let msgJson;
             try {
-              msgJson = JSON.parse(msg);
-              console.log("📩 Message from server:", msgJson);
+              const event = JSON.parse(msg);
+              this.onServerEvent(event);
             } catch (e) {
-              msgJson = null;
-            }
-            if (msgJson) {
-              console.log("Emitting server event:", msgJson);
-              this.onServerEvent(msgJson);
+              console.log("Non-JSON event message:", msg);
             }
           }
         }
       } catch (err) {
-        console.error("❌ Error reading from bidi stream:", err);
+        console.error("Error reading from event stream:", err);
       }
     })();
-    this.isChannelOpen = true;
+  }
+
+  async sendOverEventStream(data) {
+    if (!this.eventStream) {
+      console.error("Event stream not available");
+      return;
+    }
+
+    try {
+      const bytes =
+        typeof data === "string" ? new TextEncoder().encode(data) : data;
+
+      const len = bytes.length;
+      const out = new Uint8Array(4 + len);
+      const view = new DataView(out.buffer);
+      view.setUint32(0, len, false);
+      out.set(bytes, 4);
+      await this.eventStream.writer.write(out);
+    } catch (error) {
+      console.error("Failed to send over event stream:", error);
+      throw error;
+    }
+  }
+
+  async sendEvent(eventData) {
+    const eventJson = JSON.stringify(eventData);
+    await this.sendOverEventStream(eventJson);
+  }
+
+  async sendPublisherState() {
+    const stateEvent = {
+      type: "PublisherState",
+      streamId: this.streamId,
+      hasCamera: this.hasCamera,
+      hasMic: this.hasMic,
+      cameraEnabled: this.hasCamera ? this.cameraEnabled : false,
+      micEnabled: this.hasMic ? this.micEnabled : false,
+      streamType: this.streamType, // 'camera' or 'display'
+      timestamp: Date.now(),
+    };
+
+    await this.sendEvent(stateEvent);
+    this.onStatusUpdate("Publisher state sent to server");
+  }
+
+  async createBidirectionalStream(channelName) {
+    const stream = await this.webTransport.createBidirectionalStream();
+    const readable = stream.readable;
+    const writable = stream.writable;
+
+    const writer = writable.getWriter();
+    const reader = readable.getReader();
+
+    this.publishStreams.set(channelName, {
+      writer,
+      reader,
+      configSent: false,
+      config: null,
+    });
+
+    console.log(
+      `WebTransport bidirectional stream (${channelName}) established`
+    );
+
+    const initData = new TextEncoder().encode(channelName);
+    await this.sendOverStream(channelName, initData);
+
+    this.setupStreamReader(channelName, reader);
+
+    console.log(`Stream created: ${channelName}`);
+  }
+
+  setupStreamReader(channelName, reader) {
+    (async () => {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            console.log(`Stream ${channelName} closed by server`);
+            break;
+          }
+          if (value) {
+            const msg = new TextDecoder().decode(value);
+            if (msg.startsWith("ack:") || msg.startsWith("config:")) {
+              console.log(`${channelName} received:`, msg);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`Error reading from stream ${channelName}:`, err);
+      }
+    })();
+  }
+
+  async sendOverStream(channelName, frameBytes) {
+    const streamData = this.publishStreams.get(channelName);
+    if (!streamData) {
+      console.error(`Stream ${channelName} not found`);
+      return;
+    }
+
+    try {
+      const len = frameBytes.length;
+      const out = new Uint8Array(4 + len);
+      const view = new DataView(out.buffer);
+      view.setUint32(0, len, false);
+      out.set(frameBytes, 4);
+      await streamData.writer.write(out);
+    } catch (error) {
+      console.error(`Failed to send over stream ${channelName}:`, error);
+      throw error;
+    }
   }
 
   async startStreaming() {
@@ -327,36 +536,44 @@ export default class Publisher extends EventEmitter {
       throw new Error("No media stream available");
     }
 
+    this.initVideoEncoders();
+
+    this.videoEncoders.forEach((encoderObj) => {
+      console.log(
+        `Configuring encoder for ${encoderObj.channelName}`,
+        encoderObj,
+        "config",
+        encoderObj.config
+      );
+      encoderObj.encoder.configure(encoderObj.config);
+    });
+
     const triggerWorker = new Worker("polyfills/triggerWorker.js");
     triggerWorker.postMessage({ frameRate: this.currentConfig.framerate });
 
     const track = this.stream.getVideoTracks()[0];
+    console.log("Using video track:", track);
     this.videoProcessor = new MediaStreamTrackProcessor(
       track,
       triggerWorker,
       true
     );
-    const reader = this.videoProcessor.readable.getReader();
 
-    // Configure video encoder
-    this.videoEncoder.configure({
-      codec: this.currentConfig.codec,
-      width: this.currentConfig.width,
-      height: this.currentConfig.height,
-      bitrate: this.currentConfig.bitrate,
-      framerate: this.currentConfig.framerate,
-      latencyMode: "realtime",
-      hardwareAcceleration: "prefer-hardware",
-      // hevc: { format: "annexb", maxBFrames: 0 },/
-    });
+    const reader = this.videoProcessor.readable.getReader();
+    console.log("Video processor reader created:", reader);
 
     let frameCounter = 0;
+
+    const cameraEncoders = Array.from(this.videoEncoders.entries()).filter(
+      ([_, obj]) => obj.channelName.startsWith("cam")
+    );
 
     // Process video frames
     (async () => {
       try {
         while (this.isPublishing) {
           const result = await reader.read();
+
           if (result.done) break;
 
           const frame = result.value;
@@ -366,21 +583,30 @@ export default class Publisher extends EventEmitter {
           }
 
           if (!this.cameraEnabled) {
+            console.log("Camera disabled, skipping frame");
             frame.close();
             continue;
           }
 
-          if (this.videoEncoder.encodeQueueSize > 2) {
-            frame.close();
-          } else {
-            frameCounter++;
-            const keyFrame = frameCounter % 30 === 0; // Key frame every ~1 seconds
-            this.videoEncoder.encode(frame, { keyFrame });
-            frame.close();
+          frameCounter++;
+          const keyFrame = frameCounter % 30 === 0;
+
+          for (let i = 0; i < cameraEncoders.length; i++) {
+            const [quality, encoderObj] = cameraEncoders[i];
+            const isLastEncoder = i === cameraEncoders.length - 1;
+
+            if (encoderObj.encoder.encodeQueueSize <= 2) {
+              const frameToEncode = isLastEncoder
+                ? frame
+                : new VideoFrame(frame);
+              encoderObj.encoder.encode(frameToEncode, { keyFrame });
+              frameToEncode.close();
+            }
           }
         }
       } catch (error) {
         this.onStatusUpdate(`Video processing error: ${error.message}`, true);
+        console.error("Video capture error:", error);
       }
     })();
   }
@@ -406,7 +632,8 @@ export default class Publisher extends EventEmitter {
       audioTrack,
       audioRecorderOptions
     );
-    audioRecorder.ondataavailable = this.handleOpusAudioChunk.bind(this);
+    audioRecorder.ondataavailable = (typedArray) =>
+      this.handleOpusAudioChunk(typedArray, "mic_48k");
 
     await audioRecorder.start({
       timeSlice: audioRecorderOptions.timeSlice,
@@ -415,27 +642,53 @@ export default class Publisher extends EventEmitter {
     return audioRecorder;
   }
 
-  handleVideoChunk(chunk, metadata) {
-    if (metadata && metadata.decoderConfig && !this.videoMetadataReady) {
-      this.videoDescription = metadata.decoderConfig.description;
-      this.videoConfig = {
+  handleVideoChunk(chunk, metadata, quality, channelName) {
+    const encoderObj = this.videoEncoders.get(quality);
+    if (!encoderObj) return;
+
+    const streamData = this.publishStreams.get(channelName);
+    if (!streamData) return;
+
+    if (metadata && metadata.decoderConfig && !encoderObj.metadataReady) {
+      encoderObj.videoDecoderConfig = {
         codec: metadata.decoderConfig.codec,
         codedWidth: metadata.decoderConfig.codedWidth,
         codedHeight: metadata.decoderConfig.codedHeight,
         frameRate: this.currentConfig.framerate,
         description: metadata.decoderConfig.description,
       };
-      this.trySendMediaConfig();
-      this.videoMetadataReady = true;
+      encoderObj.metadataReady = true;
+      console.warn(
+        "Video config ready for",
+        channelName,
+        encoderObj.videoDecoderConfig
+      );
+      this.sendStreamConfig(
+        channelName,
+        encoderObj.videoDecoderConfig,
+        "video"
+      );
     }
+
+    if (!streamData.configSent) return;
 
     const chunkData = new ArrayBuffer(chunk.byteLength);
     chunk.copyTo(chunkData);
-    const type = chunk.type === "key" ? "video-key" : "video-delta";
-
-    if (!this.mediaConfigSent) {
-      return;
+    let type;
+    switch (channelName) {
+      case "cam_360p":
+        type = chunk.type === "key" ? 0 : 1;
+        break;
+      case "cam_720p":
+        type = chunk.type === "key" ? 2 : 3;
+        break;
+      case "screen_share_1080p":
+        type = chunk.type === "key" ? 4 : 5;
+        break;
+      default:
+        type = 8; // other
     }
+    // const type = chunk.type === "key" ? "video-key" : "video-delta";
 
     const packet = this.createPacketWithHeader(
       chunkData,
@@ -443,43 +696,47 @@ export default class Publisher extends EventEmitter {
       type
     );
 
-    this.sendOverWebTransportStream(packet);
+    this.sendOverStream(channelName, packet);
     this.sequenceNumber++;
   }
 
-  handleOpusAudioChunk(typedArray) {
+  handleOpusAudioChunk(typedArray, channelName) {
     if (!this.micEnabled) return;
-
     if (!this.isChannelOpen || !typedArray || typedArray.byteLength === 0)
       return;
 
+    const streamData = this.publishStreams.get(channelName);
+    if (!streamData) return;
+
     try {
       const dataArray = new Uint8Array(typedArray);
-
-      // Check for OGG header signature
+      // Check for Opus header "OggS"
       if (
         dataArray.length >= 4 &&
-        dataArray[0] === 79 && // "O"
-        dataArray[1] === 103 && // "g"
-        dataArray[2] === 103 && // "g"
-        dataArray[3] === 83 // "S"
+        dataArray[0] === 79 &&
+        dataArray[1] === 103 &&
+        dataArray[2] === 103 &&
+        dataArray[3] === 83
       ) {
-        if (!this.audioConfig) {
+        if (!streamData.configSent && !streamData.config) {
           const description = this.createPacketWithHeader(
             dataArray,
             performance.now() * 1000,
-            "audio"
+            6
           );
-          this.audioConfig = {
+
+          const audioConfig = {
             codec: "opus",
             sampleRate: 48000,
             numberOfChannels: 1,
-            description,
+            description: description,
           };
-          this.trySendMediaConfig();
+
+          streamData.config = audioConfig;
+          this.sendStreamConfig(channelName, audioConfig, "audio");
         }
 
-        // Initialize base time on first chunk
+        // Initialize timing
         if (this.opusBaseTime === 0 && window.videoBaseTimestamp) {
           this.opusBaseTime = window.videoBaseTimestamp;
           window.audioStartPerfTime = performance.now();
@@ -495,13 +752,10 @@ export default class Publisher extends EventEmitter {
           this.opusBaseTime +
           Math.floor((this.opusSamplesSent * 1000000) / this.kSampleRate);
 
-        if (this.mediaConfigSent) {
-          const packet = this.createPacketWithHeader(
-            dataArray,
-            timestamp,
-            "audio"
-          );
-          this.sendOverWebTransportStream(packet);
+        if (streamData.configSent) {
+          const packet = this.createPacketWithHeader(dataArray, timestamp, 6);
+
+          this.sendOverStream(channelName, packet);
         }
       }
     } catch (error) {
@@ -509,19 +763,57 @@ export default class Publisher extends EventEmitter {
     }
   }
 
-  async sendOverWebTransportStream(frameBytes) {
+  async sendStreamConfig(channelName, config, mediaType) {
+    const streamData = this.publishStreams.get(channelName);
+    if (!streamData || streamData.configSent) return;
+
     try {
-      const len = frameBytes.length;
-      const out = new Uint8Array(4 + len);
-      const view = new DataView(out.buffer);
-      view.setUint32(0, len, false); // big-endian
-      out.set(frameBytes, 4);
-      this.webtransportWriter.write(out);
+      let configPacket;
+
+      if (mediaType === "video") {
+        const vConfigUint8 = new Uint8Array(config.description);
+        const vConfigBase64 = this.uint8ArrayToBase64(vConfigUint8);
+
+        configPacket = {
+          type: "StreamConfig",
+          channelName: channelName,
+          mediaType: "video",
+          config: {
+            codec: config.codec,
+            codedWidth: config.codedWidth,
+            codedHeight: config.codedHeight,
+            frameRate: config.frameRate,
+            quality: config.quality,
+            description: vConfigBase64,
+          },
+        };
+      } else if (mediaType === "audio") {
+        const aConfigBase64 = this.uint8ArrayToBase64(
+          new Uint8Array(config.description)
+        );
+
+        configPacket = {
+          type: "StreamConfig",
+          channelName: channelName,
+          mediaType: "audio",
+          config: {
+            codec: config.codec,
+            sampleRate: config.sampleRate,
+            numberOfChannels: config.numberOfChannels,
+            description: aConfigBase64,
+          },
+        };
+      }
+      console.log("send stream config", configPacket);
+      const packet = new TextEncoder().encode(JSON.stringify(configPacket));
+      await this.sendOverStream(channelName, packet);
+
+      streamData.configSent = true;
+      streamData.config = config;
+
+      this.onStatusUpdate(`Config sent for stream: ${channelName}`);
     } catch (error) {
-      this.webtransportWriter.close();
-      // console.error("Failed to send data over WebTransport stream:", error);
-      return;
-      // this.webTransport.close();
+      console.error(`Failed to send config for ${channelName}:`, error);
     }
   }
 
@@ -545,15 +837,18 @@ export default class Publisher extends EventEmitter {
       HEADER_SIZE +
         (data instanceof ArrayBuffer ? data.byteLength : data.length)
     );
+    // type mapping
+    // video-360p-key = 0
+    // video-360p-delta = 1
+    // video-720p-key = 2
+    // video-720p-delta = 3
+    // video-1080p-key = 4
+    // video-1080p-delta = 5
+    // audio = 6
+    // config = 7
+    // other = 8
 
-    let frameType = 2;
-    if (type === "video-key") frameType = 0;
-    else if (type === "video-delta") frameType = 1;
-    else if (type === "audio") frameType = 2;
-    else if (type === "config") frameType = 3;
-    else frameType = 4; // unknown
-
-    packet[4] = frameType;
+    packet[4] = type;
 
     const view = new DataView(packet.buffer, 0, 4);
     view.setUint32(0, safeTimestamp, false);
@@ -568,45 +863,12 @@ export default class Publisher extends EventEmitter {
 
   uint8ArrayToBase64(bytes) {
     let binary = "";
-    const chunkSize = 0x8000; // ~32KB
+    const chunkSize = 0x8000;
     for (let i = 0; i < bytes.length; i += chunkSize) {
       const chunk = bytes.subarray(i, i + chunkSize);
       binary += String.fromCharCode.apply(null, chunk);
     }
     return btoa(binary);
-  }
-
-  trySendMediaConfig() {
-    if (!this.mediaConfigSent && this.audioConfig && this.videoConfig) {
-      const aConfigBase64 = this.uint8ArrayToBase64(
-        new Uint8Array(this.audioConfig.description)
-      );
-      const vConfigUint8 = new Uint8Array(this.videoConfig.description);
-      const vConfigBase64 = this.uint8ArrayToBase64(vConfigUint8);
-
-      const config = {
-        type: "DecoderConfigs",
-        audioConfig: {
-          sampleRate: this.audioConfig.sampleRate,
-          numberOfChannels: this.audioConfig.numberOfChannels,
-          codec: this.audioConfig.codec,
-          description: aConfigBase64 || null,
-        },
-        videoConfig: {
-          codec: this.videoConfig.codec,
-          codedWidth: this.videoConfig.codedWidth,
-          codedHeight: this.videoConfig.codedHeight,
-          frameRate: this.videoConfig.frameRate,
-          description: vConfigBase64 || null,
-        },
-      };
-
-      const packet = new TextEncoder().encode(JSON.stringify(config));
-      this.sendOverWebTransportStream(packet);
-
-      this.mediaConfigSent = true;
-      this.onStatusUpdate("Media configuration sent");
-    }
   }
 
   async stop() {
@@ -617,11 +879,14 @@ export default class Publisher extends EventEmitter {
     try {
       this.isPublishing = false;
 
-      // Close encoders
-      if (this.videoEncoder && this.videoEncoder.state !== "closed") {
-        await this.videoEncoder.flush();
-        this.videoEncoder.close();
+      // Close video encoders
+      for (const [quality, encoderObj] of this.videoEncoders) {
+        if (encoderObj.encoder && encoderObj.encoder.state !== "closed") {
+          await encoderObj.encoder.flush();
+          encoderObj.encoder.close();
+        }
       }
+      this.videoEncoders.clear();
 
       // Stop audio processor
       if (
@@ -632,12 +897,21 @@ export default class Publisher extends EventEmitter {
         this.audioProcessor = null;
       }
 
-      // Close WebTransport
-      if (this.webtransportWriter) {
-        await this.webtransportWriter.close();
-        this.webtransportWriter = null;
+      // Close all streams
+      for (const [channelName, streamData] of this.publishStreams) {
+        if (streamData.writer) {
+          await streamData.writer.close();
+        }
+      }
+      this.publishStreams.clear();
+
+      // Close event stream
+      if (this.eventStream && this.eventStream.writer) {
+        await this.eventStream.writer.close();
+        this.eventStream = null;
       }
 
+      // Close WebTransport
       if (this.webTransport) {
         this.webTransport.close();
         this.webTransport = null;
@@ -651,10 +925,6 @@ export default class Publisher extends EventEmitter {
 
       // Reset state
       this.isChannelOpen = false;
-      this.mediaConfigSent = false;
-      this.videoMetadataReady = false;
-      this.audioConfig = null;
-      this.videoConfig = null;
       this.sequenceNumber = 0;
       this.opusBaseTime = 0;
       this.opusSamplesSent = 0;
@@ -682,7 +952,7 @@ export default class Publisher extends EventEmitter {
       streamType: this.streamType,
       config: this.currentConfig,
       sequenceNumber: this.sequenceNumber,
-      mediaConfigSent: this.mediaConfigSent,
+      activeStreams: Array.from(this.publishStreams.keys()),
     };
   }
 }
