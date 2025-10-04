@@ -38,9 +38,6 @@ class Room extends EventEmitter {
     // Connection info
     this.membershipId = null;
     this.streamId = null;
-
-    // SDK now only works in stream output mode
-    this.streamOutputEnabled = true;
   }
 
   /**
@@ -405,16 +402,6 @@ class Room extends EventEmitter {
   }
 
   /**
-   * Setup stream event forwarding (automatically enabled in constructor)
-   */
-  enableStreamOutput() {
-    this.streamOutputEnabled = true;
-    this._setupStreamEventForwarding();
-  }
-
-  // UI rendering is now handled by the app through stream events
-
-  /**
    * Get room info
    */
   getInfo() {
@@ -482,7 +469,6 @@ class Room extends EventEmitter {
       publishUrl,
       streamType: "camera",
       streamId: "camera_stream",
-      streamOutputEnabled: true,
       width: 1280,
       height: 720,
       framerate: 30,

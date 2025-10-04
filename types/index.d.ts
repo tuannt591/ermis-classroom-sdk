@@ -238,8 +238,6 @@ export declare class ErmisClient extends EventEmitter {
   joinSubRoom(subRoomCode: string): Promise<JoinResult>;
   returnToMainRoom(): Promise<Room>;
   switchSubRoom(targetSubRoomCode: string): Promise<JoinResult>;
-  enableStreamOutput(): void;
-  disableStreamOutput(): void;
   setUIContainers(mainVideoArea: HTMLElement, sidebarArea: HTMLElement): void;
   getCurrentRoom(): Room | null;
   getRoom(roomId: string): Room | null;

@@ -542,9 +542,6 @@ class ErmisClient extends EventEmitter {
         );
       });
     });    
-
-    // Apply stream output configuration to room
-    room.enableStreamOutput();
   }
 
   /**
