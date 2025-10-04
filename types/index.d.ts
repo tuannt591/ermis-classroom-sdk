@@ -6,15 +6,9 @@ export interface ClientConfig {
   host: string;
   apiUrl?: string;
   webtpUrl?: string;
-  autoSaveCredentials?: boolean;
   reconnectAttempts?: number;
   reconnectDelay?: number;
   debug?: boolean;
-  storage?: {
-    getItem: (key: string) => string | null;
-    setItem: (key: string, value: string) => void;
-    removeItem: (key: string) => void;
-  };
   defaultVideoConfig?: {
     width?: number;
     height?: number;
