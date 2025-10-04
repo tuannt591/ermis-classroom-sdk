@@ -1,21 +1,22 @@
+import EventEmitter from "../events/EventEmitter.js";
+
 /**
  * WebRTC Publisher Class
  * Handles video/audio streaming via WebTransport
  */
-export default class Publisher {
+export default class Publisher extends EventEmitter {
   constructor(options = {}) {
+    super();
+    
     // Validate required options
     if (!options.publishUrl) {
       throw new Error("publishUrl is required");
     }
-    if (!options.videoElement) {
-      throw new Error("videoElement is required");
-    }
+    // SDK now only works in stream output mode
 
     // Configuration
     this.publishUrl = options.publishUrl;
     this.streamType = options.streamType || "camera"; // 'camera' or 'display'
-    this.videoElement = options.videoElement;
     this.streamId = options.streamId || "test_stream";
 
     // Video configuration
@@ -184,22 +185,12 @@ export default class Publisher {
   // Turn off camera (stop encoding video frames)
   turnOffCamera() {
     this.cameraEnabled = false;
-    this.videoElement && (this.videoElement.srcObject = null);
     this.onStatusUpdate("Camera turned off");
   }
 
   // Turn on camera (resume encoding video frames)
   turnOnCamera() {
     this.cameraEnabled = true;
-    if (
-      this.stream &&
-      this.stream.getVideoTracks().length > 0 &&
-      this.videoElement
-    ) {
-      const videoOnlyStream = new MediaStream();
-      videoOnlyStream.addTrack(this.stream.getVideoTracks()[0]);
-      this.videoElement.srcObject = videoOnlyStream;
-    }
     this.onStatusUpdate("Camera turned on");
   }
 
@@ -250,6 +241,7 @@ export default class Publisher {
       }
     }
 
+    // Create video-only stream for display
     const videoOnlyStream = new MediaStream();
     const videoTracks = this.stream.getVideoTracks();
 
@@ -257,10 +249,15 @@ export default class Publisher {
       videoOnlyStream.addTrack(videoTracks[0]);
     }
 
-    this.videoElement.srcObject = videoOnlyStream;
-
-    // this.videoElement.srcObject = this.stream;
-    this.onStatusUpdate(`${this.streamType} stream obtained`);
+    // Emit local stream ready event for app integration
+    this.emit("localStreamReady", {
+      stream: this.stream,           // Full stream with audio + video
+      videoOnlyStream: videoOnlyStream, // Video only stream
+      streamType: this.streamType,
+      streamId: this.streamId,
+      config: this.currentConfig
+    });
+    this.onStatusUpdate(`${this.streamType} stream ready`);
   }
 
   async setupConnection() {
@@ -651,9 +648,6 @@ export default class Publisher {
         this.stream.getTracks().forEach((track) => track.stop());
         this.stream = null;
       }
-
-      // Reset video element
-      this.videoElement.srcObject = null;
 
       // Reset state
       this.isChannelOpen = false;

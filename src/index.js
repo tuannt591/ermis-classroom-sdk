@@ -84,6 +84,11 @@ class ErmisClassroom {
       SUB_ROOM_LEFT: "subRoomLeft",
       SUB_ROOM_SWITCHED: "subRoomSwitched",
 
+      // Media stream events
+      LOCAL_STREAM_READY: "localStreamReady",
+      REMOTE_STREAM_READY: "remoteStreamReady",
+      STREAM_REMOVED: "streamRemoved",
+
       // Error events
       ERROR: "error",
     };
@@ -192,116 +197,3 @@ export { ErmisClient, Room, SubRoom, Participant, ApiClient, EventEmitter };
  * Default export - Main SDK class
  */
 export default ErmisClassroom;
-
-/**
- * Usage Examples:
- *
- * // Basic usage
- * import ErmisClassroom from 'ermis-classroom-sdk';
- *
- * const client = ErmisClassroom.create({
- *   host: 'your-server.com:9999',
- *   debug: true
- * });
- *
- * await client.authenticate('teacher@school.com');
- *
- * // Create and join room
- * const room = await client.createRoom({
- *   name: 'Physics Class',
- *   type: ErmisClassroom.RoomTypes.MAIN
- * });
- *
- * // Listen to events
- * client.on(ErmisClassroom.events.PARTICIPANT_ADDED, ({ participant }) => {
- *   console.log('New participant:', participant.userId);
- * });
- *
- * // Create breakout room
- * const breakoutRoom = await client.createSubRoom({
- *   name: 'Group 1',
- *   type: ErmisClassroom.RoomTypes.BREAKOUT,
- *   maxParticipants: 5
- * });
- *
- * // Join breakout room
- * await client.joinSubRoom(breakoutRoom.code);
- *
- * // Return to main room
- * await client.returnToMainRoom();
- *
- * // Alternative connect method
- * const client2 = await ErmisClassroom.connect(
- *   'https://your-server.com:9999',
- *   'student@school.com',
- *   { autoSaveCredentials: true }
- * );
- */
-
-/**
- * Advanced Usage Examples:
- *
- * // Custom storage implementation
- * import ErmisClassroom from 'ermis-classroom-sdk';
- *
- * const customStorage = {
- *   getItem: (key) => sessionStorage.getItem(key),
- *   setItem: (key, value) => sessionStorage.setItem(key, value),
- *   removeItem: (key) => sessionStorage.removeItem(key)
- * };
- *
- * const client = ErmisClassroom.create({
- *   host: 'server.com:9999',
- *   storage: customStorage,
- *   reconnectAttempts: 5,
- *   reconnectDelay: 3000
- * });
- *
- * // Media device management
- * const devices = await ErmisClassroom.MediaDevices.getDevices();
- * console.log('Available cameras:', devices.cameras);
- *
- * // Permission checking
- * const permissions = await ErmisClassroom.MediaDevices.checkPermissions();
- * if (permissions.camera?.state !== 'granted') {
- *   // Request camera permission
- *   await ErmisClassroom.MediaDevices.getUserMedia({ video: true });
- * }
- *
- * // Room management
- * const rooms = await client.getRooms();
- * const mainRoom = rooms.find(r => r.room_type === ErmisClassroom.RoomTypes.MAIN);
- *
- * if (mainRoom) {
- *   await client.joinRoom(mainRoom.room_code);
- * }
- *
- * // Participant management
- * client.on(ErmisClassroom.events.PARTICIPANT_ADDED, ({ participant }) => {
- *   participant.on('audioToggled', ({ enabled }) => {
- *     console.log(`${participant.userId} ${enabled ? 'unmuted' : 'muted'}`);
- *   });
- *
- *   participant.on('pinToggled', ({ pinned }) => {
- *     if (pinned) {
- *       console.log(`${participant.userId} is now pinned`);
- *     }
- *   });
- * });
- *
- * // UI Integration
- * const mainVideoArea = document.getElementById('main-video');
- * const sidebarArea = document.getElementById('sidebar-videos');
- *
- * client.setUIContainers(mainVideoArea, sidebarArea);
- *
- * // Auto-render when room is joined
- * client.on(ErmisClassroom.events.ROOM_JOINED, ({ room }) => {
- *   room.renderParticipantTiles();
- * });
- *
- * // Cleanup on page unload
- * window.addEventListener('beforeunload', () => {
- *   client.cleanup();
- * });
- */

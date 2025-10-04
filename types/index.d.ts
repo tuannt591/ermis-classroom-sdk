@@ -41,6 +41,32 @@ export interface SubRoomConfig {
   autoReturn?: boolean;
 }
 
+export interface LocalStreamReadyEvent {
+  stream: MediaStream;
+  videoOnlyStream: MediaStream;
+  streamType: string;
+  streamId: string;
+  config: any;
+  participant: ParticipantInfo;
+  roomId: string;
+}
+
+export interface RemoteStreamReadyEvent {
+  stream: MediaStream;
+  streamId: string;
+  subscriberId: string;
+  roomId: string;
+  isOwnStream: boolean;
+  participant: ParticipantInfo;
+}
+
+export interface StreamRemovedEvent {
+  streamId: string;
+  subscriberId?: string;
+  roomId: string;
+  participant: ParticipantInfo;
+}
+
 export interface User {
   id: string;
   token: string;
@@ -116,12 +142,9 @@ export declare class Participant extends EventEmitter {
   isVideoEnabled: boolean;
   isPinned: boolean;
   connectionStatus: string;
-  videoElement: HTMLVideoElement | null;
-  tile: HTMLElement | null;
 
   constructor(config: any);
   
-  createVideoTile(): HTMLElement;
   toggleMicrophone(): Promise<void>;
   toggleCamera(): Promise<void>;
   toggleRemoteAudio(): Promise<void>;
@@ -215,6 +238,8 @@ export declare class ErmisClient extends EventEmitter {
   joinSubRoom(subRoomCode: string): Promise<JoinResult>;
   returnToMainRoom(): Promise<Room>;
   switchSubRoom(targetSubRoomCode: string): Promise<JoinResult>;
+  enableStreamOutput(): void;
+  disableStreamOutput(): void;
   setUIContainers(mainVideoArea: HTMLElement, sidebarArea: HTMLElement): void;
   getCurrentRoom(): Room | null;
   getRoom(roomId: string): Room | null;
@@ -245,6 +270,9 @@ export declare class ErmisClassroom {
     readonly SUB_ROOM_JOINED: 'subRoomJoined';
     readonly SUB_ROOM_LEFT: 'subRoomLeft';
     readonly SUB_ROOM_SWITCHED: 'subRoomSwitched';
+    readonly LOCAL_STREAM_READY: 'localStreamReady';
+    readonly REMOTE_STREAM_READY: 'remoteStreamReady';
+    readonly STREAM_REMOVED: 'streamRemoved';
     readonly ERROR: 'error';
   };
 

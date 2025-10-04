@@ -39,9 +39,8 @@ class Room extends EventEmitter {
     this.membershipId = null;
     this.streamId = null;
 
-    // UI containers
-    this.mainVideoArea = null;
-    this.sidebarArea = null;
+    // SDK now only works in stream output mode
+    this.streamOutputEnabled = true;
   }
 
   /**
@@ -74,10 +73,6 @@ class Room extends EventEmitter {
 
       // Setup participants
       await this._setupParticipants(roomDetails.participants, userId);
-
-      if (this.mainVideoArea && this.sidebarArea) {
-        this.renderParticipantTiles();
-      }
 
       // Setup media connections
       await this._setupMediaConnections();
@@ -359,13 +354,11 @@ class Room extends EventEmitter {
     // Unpin current participant và move về sidebar
     if (this.pinnedParticipant && this.pinnedParticipant !== participant) {
       this.pinnedParticipant.isPinned = false;
-      this._moveParticipantTile(this.pinnedParticipant);
     }
 
     // Pin new participant và move lên main
     participant.isPinned = true;
     this.pinnedParticipant = participant;
-    this._moveParticipantTile(participant);
 
     this.emit("participantPinned", { room: this, participant });
 
@@ -396,9 +389,6 @@ class Room extends EventEmitter {
     this.pinnedParticipant.isPinned = false;
     const unpinnedParticipant = this.pinnedParticipant;
 
-    // Move về sidebar
-    this._moveParticipantTile(unpinnedParticipant);
-
     this.pinnedParticipant = null;
 
     // Auto-pin local participant nếu có
@@ -415,55 +405,14 @@ class Room extends EventEmitter {
   }
 
   /**
-   * Set UI containers for video tiles
+   * Setup stream event forwarding (automatically enabled in constructor)
    */
-  setUIContainers(mainVideoArea, sidebarArea) {
-    this.mainVideoArea = mainVideoArea;
-    this.sidebarArea = sidebarArea;
+  enableStreamOutput() {
+    this.streamOutputEnabled = true;
+    this._setupStreamEventForwarding();
   }
 
-  /**
-   * Render participant video tiles
-   */
-
-  renderParticipantTiles() {
-    if (!this.mainVideoArea || !this.sidebarArea) {
-      throw new Error("UI containers not set");
-    }
-
-    // Clear existing tiles
-    this.mainVideoArea.innerHTML = "";
-    this.sidebarArea.innerHTML = "";
-
-    console.warn(
-      "Rendering participant tiles..., participants:",
-      this.participants
-    );
-
-    // Render each participant's tile
-    for (const participant of this.participants.values()) {
-      // Tạo tile nếu chưa có
-      let tile = participant.tile;
-      if (!tile) {
-        tile = participant.createVideoTile();
-      }
-
-      if (participant.isPinned) {
-        this.mainVideoArea.appendChild(tile);
-      } else {
-        this.sidebarArea.appendChild(tile);
-      }
-    }
-
-    // Auto-pin local participant if no one is pinned
-    if (!this.pinnedParticipant && this.localParticipant) {
-      this.pinParticipant(this.localParticipant.userId);
-      const localTile = this.localParticipant.tile;
-      if (localTile && !this.mainVideoArea.contains(localTile)) {
-        this.mainVideoArea.appendChild(localTile);
-      }
-    }
-  }
+  // UI rendering is now handled by the app through stream events
 
   /**
    * Get room info
@@ -513,6 +462,9 @@ class Room extends EventEmitter {
         await this._setupRemoteSubscriber(participant);
       }
     }
+
+    // Setup stream event forwarding
+    this._setupStreamEventForwarding();
   }
 
   /**
@@ -521,21 +473,7 @@ class Room extends EventEmitter {
   async _setupLocalPublisher() {
     if (!this.localParticipant || !this.streamId) return;
 
-    // this.localParticipant.createVideoTile();
-    if (!this.localParticipant.tile) {
-      const tile = this.localParticipant.createVideoTile();
-
-      // Append to main video area if set
-      if (this.mainVideoArea) {
-        this.mainVideoArea.innerHTML = ""; // Clear placeholder
-        this.mainVideoArea.appendChild(tile);
-      }
-    }
-
-    const videoElement = this.localParticipant.videoElement;
-    if (!videoElement) {
-      throw new Error("Video element not found for local participant");
-    }
+    // Video rendering handled by app through stream events
 
     const publishUrl = `${this.mediaConfig.webtpUrl}/${this.id}/${this.streamId}`;
     console.log("trying to connect webtransport to", publishUrl);
@@ -543,8 +481,8 @@ class Room extends EventEmitter {
     const publisher = new Publisher({
       publishUrl,
       streamType: "camera",
-      videoElement: this.localParticipant.videoElement,
       streamId: "camera_stream",
+      streamOutputEnabled: true,
       width: 1280,
       height: 720,
       framerate: 30,
@@ -559,6 +497,15 @@ class Room extends EventEmitter {
       },
     });
 
+    // Setup stream event forwarding
+    publisher.on("localStreamReady", (data) => {
+      this.emit("localStreamReady", {
+        ...data,
+        participant: this.localParticipant.getInfo(),
+        roomId: this.id
+      });
+    });
+
     await publisher.startPublishing();
     this.localParticipant.setPublisher(publisher);
   }
@@ -571,7 +518,7 @@ class Room extends EventEmitter {
       streamId: participant.streamId,
       roomId: this.id,
       host: this.mediaConfig.host,
-      videoElement: participant.videoElement,
+      streamOutputEnabled: true,
       onStatus: (msg, isError) => {
         participant.setConnectionStatus(isError ? "failed" : "connected");
       },
@@ -583,6 +530,23 @@ class Room extends EventEmitter {
       subscriber.setAudioMixer(this.audioMixer);
     }
 
+    // Setup stream event forwarding
+    subscriber.on("remoteStreamReady", (data) => {
+      this.emit("remoteStreamReady", {
+        ...data,
+        participant: participant.getInfo(),
+        roomId: this.id
+      });
+    });
+
+    subscriber.on("streamRemoved", (data) => {
+      this.emit("streamRemoved", {
+        ...data,
+        participant: participant.getInfo(),
+        roomId: this.id
+      });
+    });
+
     await subscriber.start();
     participant.setSubscriber(subscriber);
   }
@@ -592,28 +556,6 @@ class Room extends EventEmitter {
    */
   async _handleServerEvent(event) {
     console.log("Received server event:", event);
-    // if (event.type === "join") {
-    //   const joinedParticipant = event.participant;
-    //   if (joinedParticipant.user_id === this.localParticipant?.userId) return;
-
-    //   const participant = this.addParticipant(
-    //     {
-    //       user_id: joinedParticipant.user_id,
-    //       stream_id: joinedParticipant.stream_id,
-    //       id: joinedParticipant.membership_id,
-    //       role: joinedParticipant.role,
-    //     },
-    //     this.localParticipant?.userId
-    //   );
-
-    //   this.renderParticipantTiles();
-    //   await this._setupRemoteSubscriber(participant);
-    // }
-
-    // if (event.type === "leave") {
-    //   this.removeParticipant(event.participant.user_id);
-    //   this.renderParticipantTiles();
-    // }
     if (event.type === "join") {
       const joinedParticipant = event.participant;
       if (joinedParticipant.user_id === this.localParticipant?.userId) return;
@@ -628,61 +570,22 @@ class Room extends EventEmitter {
         this.localParticipant?.userId
       );
 
-      // Tạo tile và thêm vào UI ngay
-      const tile = participant.createVideoTile();
-      if (this.sidebarArea) {
-        this.sidebarArea.appendChild(tile);
-      }
-
-      // Setup subscriber sau khi đã có tile và videoElement
       await this._setupRemoteSubscriber(participant);
     }
 
     if (event.type === "leave") {
       const participant = this.participants.get(event.participant.user_id);
       if (participant) {
-        // Remove tile khỏi DOM trước
-        if (participant.tile && participant.tile.parentNode) {
-          participant.tile.parentNode.removeChild(participant.tile);
-        }
-
         // Sau đó cleanup participant
         this.removeParticipant(event.participant.user_id);
 
         // Nếu người bị remove là pinned participant, auto-pin local
         if (!this.pinnedParticipant && this.localParticipant) {
           this.pinParticipant(this.localParticipant.userId);
-          if (this.localParticipant.tile && this.mainVideoArea) {
-            this.mainVideoArea.innerHTML = "";
-            this.mainVideoArea.appendChild(this.localParticipant.tile);
-          }
         }
       }
     }
   }
-
-  /**
-   * Setup event listeners for a participant
-   */
-  // _setupParticipantEvents(participant) {
-  //   participant.on("pinToggled", ({ participant: p, pinned }) => {
-  //     if (pinned) {
-  //       this.pinParticipant(p.userId);
-  //     } else if (this.pinnedParticipant === p) {
-  //       this.unpinParticipant();
-  //     }
-  //     this.renderParticipantTiles();
-  //   });
-
-  //   participant.on("error", ({ participant: p, error, action }) => {
-  //     this.emit("participantError", {
-  //       room: this,
-  //       participant: p,
-  //       error,
-  //       action,
-  //     });
-  //   });
-  // }
 
   _setupParticipantEvents(participant) {
     participant.on("pinToggled", ({ participant: p, pinned }) => {
@@ -691,9 +594,6 @@ class Room extends EventEmitter {
       } else if (this.pinnedParticipant === p) {
         this.unpinParticipant();
       }
-
-      // Chỉ di chuyển tile của participant này
-      this._moveParticipantTile(p);
     });
 
     participant.on("error", ({ participant: p, error, action }) => {
@@ -704,23 +604,6 @@ class Room extends EventEmitter {
         action,
       });
     });
-  }
-
-  _moveParticipantTile(participant) {
-    if (!participant.tile) return;
-
-    // Remove khỏi vị trí hiện tại
-    if (participant.tile.parentNode) {
-      participant.tile.parentNode.removeChild(participant.tile);
-    }
-
-    // Thêm vào vị trí mới
-    if (participant.isPinned && this.mainVideoArea) {
-      this.mainVideoArea.innerHTML = "";
-      this.mainVideoArea.appendChild(participant.tile);
-    } else if (!participant.isPinned && this.sidebarArea) {
-      this.sidebarArea.appendChild(participant.tile);
-    }
   }
 
   /**
@@ -765,6 +648,61 @@ class Room extends EventEmitter {
     this.participants.clear();
     this.localParticipant = null;
     this.pinnedParticipant = null;
+  }
+
+  /**
+   * Setup stream event forwarding for existing participants
+   */
+  _setupStreamEventForwarding() {
+    // Setup for local participant if exists
+    if (this.localParticipant && this.localParticipant.publisher) {
+      this.localParticipant.publisher.on("localStreamReady", (data) => {
+        this.emit("localStreamReady", {
+          ...data,
+          participant: this.localParticipant.getInfo(),
+          roomId: this.id
+        });
+      });
+    }
+
+    // Setup for remote participants
+    for (const participant of this.participants.values()) {
+      if (participant.subscriber && !participant.isLocal) {
+        participant.subscriber.on("remoteStreamReady", (data) => {
+          this.emit("remoteStreamReady", {
+            ...data,
+            participant: participant.getInfo(),
+            roomId: this.id
+          });
+        });
+
+        participant.subscriber.on("streamRemoved", (data) => {
+          this.emit("streamRemoved", {
+            ...data,
+            participant: participant.getInfo(),
+            roomId: this.id
+          });
+        });
+      }
+    }
+  }
+
+  /**
+   * Remove stream event forwarding
+   */
+  _removeStreamEventForwarding() {
+    // Remove local participant events
+    if (this.localParticipant && this.localParticipant.publisher) {
+      this.localParticipant.publisher.removeAllListeners("localStreamReady");
+    }
+
+    // Remove remote participants events
+    for (const participant of this.participants.values()) {
+      if (participant.subscriber && !participant.isLocal) {
+        participant.subscriber.removeAllListeners("remoteStreamReady");
+        participant.subscriber.removeAllListeners("streamRemoved");
+      }
+    }
   }
 
   /**

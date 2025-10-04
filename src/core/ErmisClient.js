@@ -431,24 +431,6 @@ class ErmisClient extends EventEmitter {
   }
 
   /**
-   * Set UI containers for video rendering
-   */
-  setUIContainers(mainVideoArea, sidebarArea) {
-    console.warn("[ErmisCLient] Setting UI containers:", {
-      mainVideoArea,
-      sidebarArea,
-    });
-    this.mediaConfig.mainVideoArea = mainVideoArea;
-    this.mediaConfig.sidebarArea = sidebarArea;
-
-    // Apply to current room if any
-    if (this.state.currentRoom) {
-      console.log("Applying UI containers to current room");
-      this.state.currentRoom.setUIContainers(mainVideoArea, sidebarArea);
-    }
-  }
-
-  /**
    * Get client state
    */
   getState() {
@@ -538,32 +520,31 @@ class ErmisClient extends EventEmitter {
   _setupRoomEvents(room) {
     // Forward room events to client
     const eventsToForward = [
-      "joined",
-      "left",
+      "roomJoined",
+      "roomLeft",
       "participantAdded",
       "participantRemoved",
       "participantPinned",
       "participantUnpinned",
       "subRoomCreated",
+      "localStreamReady",
+      "remoteStreamReady",
+      "streamRemoved",
       "error",
     ];
 
     eventsToForward.forEach((event) => {
       room.on(event, (data) => {
         this.emit(
-          `room${event.charAt(0).toUpperCase() + event.slice(1)}`,
+          // `room${event.charAt(0).toUpperCase() + event.slice(1)}`,
+          event,
           data
         );
       });
-    });
+    });    
 
-    // Set UI containers if available
-    if (this.mediaConfig.mainVideoArea && this.mediaConfig.sidebarArea) {
-      room.setUIContainers(
-        this.mediaConfig.mainVideoArea,
-        this.mediaConfig.sidebarArea
-      );
-    }
+    // Apply stream output configuration to room
+    room.enableStreamOutput();
   }
 
   /**

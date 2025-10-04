@@ -12,7 +12,6 @@ class Subscriber extends EventEmitter {
     this.streamId = config.streamId || "";
     this.roomId = config.roomId || "";
     this.host = config.host || "stream-gate.bandia.vn";
-    this.videoElement = config.videoElement;
     this.isOwnStream = config.isOwnStream || false;
 
     // Media configuration
@@ -93,13 +92,17 @@ class Subscriber extends EventEmitter {
         this.worker = null;
       }
 
+      // Emit stream removal event for app integration
+      if (this.mediaStream) {
+        this.emit("streamRemoved", {
+          streamId: this.streamId,
+          subscriberId: this.subscriberId,
+          roomId: this.roomId
+        });
+      }
+
       // Close video components
       this._cleanupVideoSystem();
-
-      // Clear video element
-      if (this.videoElement) {
-        this.videoElement.srcObject = null;
-      }
 
       // Clear references
       this.audioWorkletNode = null;
@@ -274,11 +277,14 @@ class Subscriber extends EventEmitter {
       // Create MediaStream with video track only
       this.mediaStream = new MediaStream([this.videoGenerator]);
 
-      // Set video element source
-      if (this.videoElement) {
-        this.videoElement.srcObject = this.mediaStream;
-      }
-
+      // Emit remote stream ready event for app integration
+      this.emit("remoteStreamReady", {
+        stream: this.mediaStream,
+        streamId: this.streamId,
+        subscriberId: this.subscriberId,
+        roomId: this.roomId,
+        isOwnStream: this.isOwnStream
+      });
       this.emit("videoInitialized", { subscriber: this });
     } catch (error) {
       throw new Error(`Video system initialization failed: ${error.message}`);
