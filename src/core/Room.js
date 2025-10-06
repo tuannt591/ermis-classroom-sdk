@@ -525,13 +525,13 @@ class Room extends EventEmitter {
       });
     });
 
-    subscriber.on("streamRemoved", (data) => {
-      this.emit("streamRemoved", {
-        ...data,
-        participant: participant.getInfo(),
-        roomId: this.id
-      });
-    });
+    // subscriber.on("streamRemoved", (data) => {
+    //   this.emit("streamRemoved", {
+    //     ...data,
+    //     participant: participant.getInfo(),
+    //     roomId: this.id
+    //   });
+    // });
 
     await subscriber.start();
     participant.setSubscriber(subscriber);
@@ -541,7 +541,7 @@ class Room extends EventEmitter {
    * Handle server events from publisher
    */
   async _handleServerEvent(event) {
-    console.log("Received server event:", event);
+    console.log("-----Received server event----", event);
     if (event.type === "join") {
       const joinedParticipant = event.participant;
       if (joinedParticipant.user_id === this.localParticipant?.userId) return;
@@ -662,13 +662,13 @@ class Room extends EventEmitter {
           });
         });
 
-        participant.subscriber.on("streamRemoved", (data) => {
-          this.emit("streamRemoved", {
-            ...data,
-            participant: participant.getInfo(),
-            roomId: this.id
-          });
-        });
+        // participant.subscriber.on("streamRemoved", (data) => {
+        //   this.emit("streamRemoved", {
+        //     ...data,
+        //     participant: participant.getInfo(),
+        //     roomId: this.id
+        //   });
+        // });
       }
     }
   }

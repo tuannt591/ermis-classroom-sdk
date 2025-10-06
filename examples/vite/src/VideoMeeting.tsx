@@ -150,7 +150,7 @@ const ControlsContainer = styled.div`
   z-index: 20;
 `;
 
-const ControlButton = styled.button<{ isActive?: boolean; variant?: 'mic' | 'video' | 'leave' }>`
+const ControlButton = styled.button<{ $isActive?: boolean; variant?: 'mic' | 'video' | 'leave' }>`
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -174,7 +174,7 @@ const ControlButton = styled.button<{ isActive?: boolean; variant?: 'mic' | 'vid
       `;
     }
 
-    if (props.isActive) {
+    if (props.$isActive) {
       return `
         background: #28a745;
         color: white;
@@ -240,9 +240,9 @@ const VideoMeeting: React.FC = () => {
       clientRef.current = ErmisClassroom.create({
         host: "daibo.ermis.network:9992",
         debug: true,
+        webtpUrl: "https://daibo.ermis.network:4458/meeting/wt"
       });
 
-      // clientRef.current.enableStreamOutput();
       // Setup event listeners ngay khi tạo client
       setupEventListeners(clientRef.current);
     }
@@ -280,15 +280,13 @@ const VideoMeeting: React.FC = () => {
     });
 
     // Lắng nghe khi remote stream bị remove
-    client.on(events.STREAM_REMOVED, (event: any) => {
-      console.log('-----remoteStreamRemoved---------', event);
-
-      setRemoteStreams(prev => {
-        const updated = new Map(prev);
-        updated.delete(event.participant.userId);
-        return updated;
-      });
-    });
+    // client.on(events.STREAM_REMOVED, (event: any) => {
+    //   setRemoteStreams(prev => {
+    //     const updated = new Map(prev);
+    //     updated.delete(event.participant.userId);
+    //     return updated;
+    //   });
+    // });
 
     // Room events
     client.on(events.ROOM_JOINED, (data: any) => {
@@ -369,8 +367,6 @@ const VideoMeeting: React.FC = () => {
     }
   };
 
-
-
   // Toggle microphone
   const handleToggleMicrophone = async () => {
     const localParticipant = currentRoom?.localParticipant;
@@ -410,8 +406,6 @@ const VideoMeeting: React.FC = () => {
       console.error('Failed to leave room:', error);
     }
   };
-
-  console.log('---participants---', participants);
 
   // Function to render participant videos based on layout rules
   const renderParticipantVideos = () => {
@@ -530,7 +524,7 @@ const VideoMeeting: React.FC = () => {
           <ControlsContainer>
             <ControlButton
               variant="mic"
-              isActive={isMicEnabled}
+              $isActive={isMicEnabled}
               onClick={handleToggleMicrophone}
               title={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
             >
@@ -539,7 +533,7 @@ const VideoMeeting: React.FC = () => {
 
             <ControlButton
               variant="video"
-              isActive={isVideoEnabled}
+              $isActive={isVideoEnabled}
               onClick={handleToggleCamera}
               title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
             >

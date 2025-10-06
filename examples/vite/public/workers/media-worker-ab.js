@@ -3,16 +3,14 @@ import { OpusAudioDecoder } from "../opus_decoder/opusDecoder.js";
 import "../polyfills/audioData.js";
 import "../polyfills/encodedAudioChunk.js";
 
-// import { OpusAudioDecoder } from "../opus_decoder/opusDecoder";
-
-// importScripts("../opus_decoder/opusDecoder.js?v=1");
-// importScripts("./polyfills/audioData.min.js");
-// importScripts("./polyfills/encodedAudioChunk.min.js");
-
-let videoDecoder;
+let videoDecoder360p;
+let videoDecoder720p;
+let currentVideoDecoder; // Decoder hiện đang active
+let currentQuality = "360p"; // Quality hiện tại
 let audioDecoder;
 let mediaWebsocket = null;
-let videoConfig;
+let video360pConfig;
+let video720pConfig;
 let videoFrameRate;
 let audioFrameRate;
 let audioConfig;
@@ -32,21 +30,25 @@ let videoCodecReceived = false;
 let audioCodecReceived = false;
 let keyFrameReceived = false;
 
-const videoInit = {
+const createVideoInit = (quality) => ({
   output: (frame) => {
     self.postMessage(
       {
         type: "videoData",
         frame: frame,
+        quality: quality,
       },
       [frame]
     );
   },
   error: (e) => {
-    console.error("Video decoder error:", e);
-    self.postMessage({ type: "error", message: e.message });
+    console.error(`Video decoder error (${quality}):`, e);
+    self.postMessage({
+      type: "error",
+      message: `${quality} decoder: ${e.message}`,
+    });
   },
-};
+});
 
 function logStats() {
   setInterval(() => {
@@ -83,7 +85,7 @@ function startSendingVideo(interval) {
 
     const frameToSend = videoFrameBuffer.shift();
     if (frameToSend) {
-      videoDecoder.decode(frameToSend);
+      currentVideoDecoder.decode(frameToSend);
     }
   }, interval.rate);
 }
@@ -201,26 +203,30 @@ function startSendingAudio(interval) {
 }
 
 self.onmessage = async function (e) {
-  const { type, data, port } = e.data;
+  const { type, data, port, quality } = e.data;
   switch (type) {
     case "init":
       mediaUrl = data.mediaUrl;
       console.log("Media Worker: Initializing with stream url:", mediaUrl);
       await initializeDecoders();
-      setupWebSocket();
+      setupWebSocket(quality);
       if (port && port instanceof MessagePort) {
         console.log("Media Worker: Received port to connect to Audio Worklet.");
         workletPort = port;
       }
       break;
 
-    case "toggle-audio":
+    case "toggleAudio":
       audioEnabled = !audioEnabled;
       console.log(
         "Media Worker: Toggling audio. Now audioEnabled =",
         audioEnabled
       );
       self.postMessage({ type: "audio-toggled", audioEnabled });
+      break;
+
+    case "switchBitrate":
+      handleBitrateSwitch(quality);
       break;
 
     case "reset":
@@ -241,7 +247,12 @@ async function initializeDecoders() {
     event: "init-decoders",
     message: "Initializing decoders",
   });
-  videoDecoder = new VideoDecoder(videoInit);
+
+  // Khởi tạo 2 video decoder
+  videoDecoder360p = new VideoDecoder(createVideoInit("360p"));
+  videoDecoder720p = new VideoDecoder(createVideoInit("720p"));
+  currentVideoDecoder = videoDecoder360p; // Mặc định dùng 360p
+
   try {
     audioDecoder = new OpusAudioDecoder(audioInit);
     self.postMessage({
@@ -261,10 +272,11 @@ async function initializeDecoders() {
   }
 }
 
-function setupWebSocket() {
+function setupWebSocket(initialQuality = "360p") {
   mediaWebsocket = new WebSocket(mediaUrl);
   mediaWebsocket.binaryType = "arraybuffer";
   mediaWebsocket.onopen = () => {
+    mediaWebsocket.send(JSON.stringify({ quality: initialQuality }));
     self.postMessage({
       type: "log",
       level: "info",
@@ -274,6 +286,43 @@ function setupWebSocket() {
   };
   mediaWebsocket.onmessage = handleMediaWsMessage;
   mediaWebsocket.onclose = handleMediaWsClose;
+}
+
+function handleBitrateSwitch(quality) {
+  // Gửi yêu cầu lên server
+  if (mediaWebsocket && mediaWebsocket.readyState === WebSocket.OPEN) {
+    const message = {
+      quality,
+    };
+    console.log(`Switching bitrate to ${quality}, message:`, message);
+    mediaWebsocket.send(JSON.stringify(message));
+
+    // Chuyển decoder
+    if (quality === "360p") {
+      currentVideoDecoder = videoDecoder360p;
+      currentQuality = "360p";
+    } else if (quality === "720p") {
+      currentVideoDecoder = videoDecoder720p;
+      currentQuality = "720p";
+    }
+
+    // Reset keyframe flag để chờ keyframe mới
+    keyFrameReceived = false;
+
+    self.postMessage({
+      type: "log",
+      level: "info",
+      event: "bitrate-switched",
+      message: `Switched to ${quality}`,
+    });
+
+    self.postMessage({
+      type: "bitrateChanged",
+      quality: quality,
+    });
+  } else {
+    console.error("WebSocket not ready for bitrate switch");
+  }
 }
 
 function handleMediaWsMessage(event) {
@@ -295,20 +344,31 @@ function handleMediaWsMessage(event) {
       dataJson.type === "DecoderConfigs" &&
       (!videoCodecReceived || !audioCodecReceived)
     ) {
-      videoConfig = dataJson.videoConfig;
+      // Lưu cả 2 video config
+      video360pConfig = dataJson.video360pConfig;
+      video720pConfig = dataJson.video720pConfig;
       audioConfig = dataJson.audioConfig;
-      videoFrameRate = videoConfig.frameRate;
-      audioFrameRate = audioConfig.sampleRate / 1024;
-      const vConfigRecv = videoConfig.description;
-      videoConfig.description = base64ToUint8Array(videoConfig.description);
 
+      videoFrameRate = video360pConfig.frameRate;
+      audioFrameRate = audioConfig.sampleRate / 1024;
+
+      // Convert description từ base64
+      video360pConfig.description = base64ToUint8Array(
+        video360pConfig.description
+      );
+      video720pConfig.description = base64ToUint8Array(
+        video720pConfig.description
+      );
       const audioConfigDescription = base64ToUint8Array(
         audioConfig.description
       );
-      videoDecoder.configure(videoConfig);
+
+      // Configure cả 2 video decoder
+      videoDecoder360p.configure(video360pConfig);
+      videoDecoder720p.configure(video720pConfig);
       audioDecoder.configure(audioConfig);
 
-      // decode first audio frame to trigger audio decoder
+      // Decode first audio frame để khởi tạo audio decoder
       try {
         const dataView = new DataView(audioConfigDescription.buffer);
         const timestamp = dataView.getUint32(0, false);
@@ -324,48 +384,58 @@ function handleMediaWsMessage(event) {
       } catch (error) {
         console.log("Error decoding first audio frame:", error);
       }
+
       videoCodecReceived = true;
       audioCodecReceived = true;
+
       self.postMessage({
         type: "codecReceived",
         stream: "both",
-        videoConfig,
+        video360pConfig,
+        video720pConfig,
         audioConfig,
       });
       return;
     }
 
     if (event.data === "publish") {
-      videoDecoder.reset();
+      videoDecoder360p.reset();
+      videoDecoder720p.reset();
       audioDecoder.reset();
       videoCodecReceived = false;
       audioCodecReceived = false;
-      videoCodecDescriptionReceived = false;
-      audioCodecDescriptionReceived = false;
+      keyFrameReceived = false;
       return;
     }
     if (event.data === "ping") {
       return;
     }
   }
+
   // Nhận frame (ArrayBuffer)
   if (event.data instanceof ArrayBuffer) {
     const dataView = new DataView(event.data);
     const timestamp = dataView.getUint32(0, false);
     const frameType = dataView.getUint8(4);
     const data = event.data.slice(5);
-    let type;
-    if (frameType === 0) type = "key";
-    else if (frameType === 1) type = "delta";
-    else if (frameType === 2) type = "audio";
-    else if (frameType === 3) type = "config";
-    else type = "unknown";
 
-    if (type === "audio") {
+    // Mapping frameType theo định nghĩa mới
+    // video-360p-key = 0
+    // video-360p-delta = 1
+    // video-720p-key = 2
+    // video-720p-delta = 3
+    // video-1080p-key = 4
+    // video-1080p-delta = 5
+    // audio = 6
+    // config = 7
+    // other = 8
+
+    if (frameType === 6) {
+      // Audio frame
       if (!audioEnabled) return;
-      // Audio
+
       if (audioDecoder.state === "closed") {
-        audioDecoder = new AudioDecoder(audioInit);
+        audioDecoder = new OpusAudioDecoder(audioInit);
         audioDecoder.configure(audioConfig);
       }
       const chunk = new EncodedAudioChunk({
@@ -375,31 +445,59 @@ function handleMediaWsMessage(event) {
       });
       audioDecoder.decode(chunk);
       return;
-    } else if (type === "key" || type === "delta") {
-      // Video
-      type === "key" && (keyFrameReceived = true);
+    } else if (frameType === 0 || frameType === 1) {
+      // Video 360p
+      const type = frameType === 0 ? "key" : "delta";
+
+      if (type === "key") {
+        keyFrameReceived = true;
+      }
+
       if (keyFrameReceived) {
-        if (videoDecoder.state === "closed") {
-          videoDecoder = new VideoDecoder(videoInit);
-          videoDecoder.configure(videoConfig);
+        if (videoDecoder360p.state === "closed") {
+          videoDecoder360p = new VideoDecoder(createVideoInit("360p"));
+          videoDecoder360p.configure(video360pConfig);
         }
         const encodedChunk = new EncodedVideoChunk({
           timestamp: timestamp * 1000,
           type,
           data,
-          // duration: 1000000 / Math.ceil(videoFrameRate),
         });
-        // videoFrameBuffer.push(encodedChunk);
-        videoDecoder.decode(encodedChunk);
 
-        return;
+        // if (currentQuality === "360p") {
+        videoDecoder360p.decode(encodedChunk);
+        // }
       }
-    } else if (type === "config") {
+      return;
+    } else if (frameType === 2 || frameType === 3) {
+      // Video 720p
+      const type = frameType === 2 ? "key" : "delta";
+
+      if (type === "key") {
+        keyFrameReceived = true;
+      }
+
+      if (keyFrameReceived) {
+        if (videoDecoder720p.state === "closed") {
+          videoDecoder720p = new VideoDecoder(createVideoInit("720p"));
+          videoDecoder720p.configure(video720pConfig);
+        }
+        const encodedChunk = new EncodedVideoChunk({
+          timestamp: timestamp * 1000,
+          type,
+          data,
+        });
+
+        // if (currentQuality === "720p") {
+        videoDecoder720p.decode(encodedChunk);
+        // }
+      }
+      return;
+    } else if (frameType === 7) {
       // Config data
       console.warn("[Media worker]: Received config data (unexpected):", data);
       return;
     }
-    // Unknown type
   }
 }
 
@@ -422,20 +520,21 @@ function resetWebsocket() {
   }
 
   // Reset decoder, buffer, trạng thái
-  if (videoDecoder) {
-    videoDecoder.reset();
+  if (videoDecoder360p) {
+    videoDecoder360p.reset();
+  }
+  if (videoDecoder720p) {
+    videoDecoder720p.reset();
   }
   if (audioDecoder) {
     audioDecoder.reset();
   }
+
   videoCodecReceived = false;
   audioCodecReceived = false;
-  videoCodecDescriptionReceived = false;
-  audioCodecDescriptionReceived = false;
+  keyFrameReceived = false;
   videoFrameBuffer = [];
   audioFrameBuffer = [];
-  videoPlaybackStarted = false;
-  audioPlaybackStarted = false;
   clearInterval(videoIntervalID);
   clearInterval(audioIntervalID);
 
@@ -462,11 +561,17 @@ function stop() {
     mediaWebsocket = null;
   }
 
-  if (videoDecoder) {
+  if (videoDecoder360p) {
     try {
-      videoDecoder.close();
+      videoDecoder360p.close();
     } catch (e) {}
-    videoDecoder = null;
+    videoDecoder360p = null;
+  }
+  if (videoDecoder720p) {
+    try {
+      videoDecoder720p.close();
+    } catch (e) {}
+    videoDecoder720p = null;
   }
   if (audioDecoder) {
     try {
@@ -477,15 +582,12 @@ function stop() {
 
   videoFrameBuffer = [];
   audioFrameBuffer = [];
-  videoPlaybackStarted = false;
-  audioPlaybackStarted = false;
   clearInterval(videoIntervalID);
   clearInterval(audioIntervalID);
 
   videoCodecReceived = false;
   audioCodecReceived = false;
-  videoCodecDescriptionReceived = false;
-  audioCodecDescriptionReceived = false;
+  keyFrameReceived = false;
 
   self.postMessage({
     type: "log",

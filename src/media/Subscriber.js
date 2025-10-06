@@ -15,7 +15,7 @@ class Subscriber extends EventEmitter {
     this.isOwnStream = config.isOwnStream || false;
 
     // Media configuration
-    this.mediaWorkerUrl = config.mediaWorkerUrl || "workers/media-worker.js";
+    this.mediaWorkerUrl = config.mediaWorkerUrl || "workers/media-worker-ab.js";
     this.audioWorkletUrl =
       config.audioWorkletUrl || "workers/audio-worklet1.js";
     this.mstgPolyfillUrl =
@@ -125,7 +125,7 @@ class Subscriber extends EventEmitter {
     }
 
     try {
-      this.worker.postMessage({ type: "toggle-audio" });
+      this.worker.postMessage({ type: "toggleAudio" });
       this.isAudioEnabled = !this.isAudioEnabled;
 
       this.emit("audioToggled", {
@@ -194,7 +194,7 @@ class Subscriber extends EventEmitter {
         });
       };
 
-      const mediaUrl = `wss://${this.host}/meeting/${this.roomId}/${this.streamId}`;
+      const mediaUrl = `wss://sfu-adaptive-bitrate.ermis-network.workers.dev/meeting/${this.roomId}/${this.streamId}`;
       console.log("try to init worker with url:", mediaUrl);
 
       this.worker.postMessage(
@@ -202,11 +202,22 @@ class Subscriber extends EventEmitter {
           type: "init",
           data: { mediaUrl },
           port: channelPort,
+          quality: "360p", // default quality
         },
         [channelPort]
       );
     } catch (error) {
       throw new Error(`Worker initialization failed: ${error.message}`);
+    }
+  }
+
+  switchBitrate(quality) {
+    // 360p | 720p
+    if (this.worker) {
+      this.worker.postMessage({
+        type: "switchBitrate",
+        quality,
+      });
     }
   }
 
