@@ -15,6 +15,8 @@ const Container = styled.div`
   padding: 30px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: #f5f5f5;
+  width: 100%;
+  height: 100%;
 `;
 
 const LoginSection = styled.div`
@@ -32,15 +34,17 @@ const VideoContainer = styled.div`
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   position: relative;
   width: 100%;
+  height: 100%;
 `;
 
 const MainVideoStyled = styled.div<{ $totalParticipants: number }>`
-  height: 500px;
+  width: 100%;
+  height: 100%;
   background: #000;
   position: relative;
   display: grid;
   grid-template-columns: ${props => {
-    if (props.$totalParticipants === 1) return '1fr';
+    if (props.$totalParticipants === 1 || props.$totalParticipants === 0) return '1fr';
     if (props.$totalParticipants === 2) return 'repeat(2, 1fr)';
     return 'repeat(3, 1fr)';
   }};
@@ -147,16 +151,14 @@ const ControlsContainer = styled.div`
 `;
 
 const ControlButton = styled.button<{ isActive?: boolean; variant?: 'mic' | 'video' | 'leave' }>`
-  width: 50px;
-  height: 50px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  font-weight: bold;
   transition: all 0.3s ease;
   
   ${props => {
@@ -235,7 +237,7 @@ const VideoMeeting: React.FC = () => {
   useEffect(() => {
     if (!clientRef.current) {
       clientRef.current = ErmisClassroom.create({
-        host: "daibo.ermis.network:9999",
+        host: "daibo.ermis.network:9992",
         debug: true,
       });
 
