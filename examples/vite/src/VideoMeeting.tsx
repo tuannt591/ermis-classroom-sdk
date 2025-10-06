@@ -160,6 +160,7 @@ const ControlButton = styled.button<{ isActive?: boolean; variant?: 'mic' | 'vid
   align-items: center;
   justify-content: center;
   transition: all 0.3s ease;
+  padding: 0;
   
   ${props => {
     if (props.variant === 'leave') {
@@ -533,7 +534,7 @@ const VideoMeeting: React.FC = () => {
               onClick={handleToggleMicrophone}
               title={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
             >
-              {isMicEnabled ? <MdMic size='40px' /> : <MdMicOff size='40px' />}
+              {isMicEnabled ? <MdMic size={20} /> : <MdMicOff size={20} />}
             </ControlButton>
 
             <ControlButton
@@ -542,7 +543,7 @@ const VideoMeeting: React.FC = () => {
               onClick={handleToggleCamera}
               title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
             >
-              {isVideoEnabled ? <MdVideocam size='40px' /> : <MdVideocamOff size='40px' />}
+              {isVideoEnabled ? <MdVideocam size={20} /> : <MdVideocamOff size={20} />}
             </ControlButton>
 
             <ControlButton
@@ -550,7 +551,7 @@ const VideoMeeting: React.FC = () => {
               onClick={handleLeaveRoom}
               title="Leave room"
             >
-              <MdCallEnd size='40px' />
+              <MdCallEnd size={20} />
             </ControlButton>
           </ControlsContainer>
         )}
