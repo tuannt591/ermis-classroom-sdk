@@ -220,6 +220,15 @@ export default class Publisher extends EventEmitter {
   // Turn on camera (resume encoding video frames)
   turnOnCamera() {
     this.cameraEnabled = true;
+    // if (
+    //   this.stream &&
+    //   this.stream.getVideoTracks().length > 0 &&
+    //   this.videoElement
+    // ) {
+    //   const videoOnlyStream = new MediaStream();
+    //   videoOnlyStream.addTrack(this.stream.getVideoTracks()[0]);
+    //   this.videoElement.srcObject = videoOnlyStream;
+    // }
     this.onStatusUpdate("Camera turned on");
   }
 
