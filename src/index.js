@@ -75,8 +75,8 @@ class ErmisClassroom {
       PARTICIPANT_REMOVED: "participantRemoved",
       PARTICIPANT_PINNED: "participantPinned",
       PARTICIPANT_UNPINNED: "participantUnpinned",
-      PARTICIPANT_AUDIO_TOGGLED: "audioToggled",
-      PARTICIPANT_VIDEO_TOGGLED: "videoToggled",
+      AUDIO_TOGGLED: "audioToggled",
+      VIDEO_TOGGLED: "videoToggled",
 
       // Sub room events
       SUB_ROOM_CREATED: "subRoomCreated",

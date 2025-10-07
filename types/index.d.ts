@@ -262,8 +262,8 @@ export declare class ErmisClassroom {
     readonly PARTICIPANT_REMOVED: 'participantRemoved';
     readonly PARTICIPANT_PINNED: 'participantPinned';
     readonly PARTICIPANT_UNPINNED: 'participantUnpinned';
-    readonly PARTICIPANT_AUDIO_TOGGLED: 'audioToggled';
-    readonly PARTICIPANT_VIDEO_TOGGLED: 'videoToggled';
+    readonly AUDIO_TOGGLED: 'audioToggled';
+    readonly VIDEO_TOGGLED: 'videoToggled';
     readonly SUB_ROOM_CREATED: 'subRoomCreated';
     readonly SUB_ROOM_JOINED: 'subRoomJoined';
     readonly SUB_ROOM_LEFT: 'subRoomLeft';

@@ -208,7 +208,7 @@ const LocalVideoOverlay = styled.div`
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.7);
+  background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -299,6 +299,10 @@ const VideoMeeting: React.FC = () => {
       setParticipants(prev => new Map(prev.set(data.participant.userId, data.participant)));
     });
 
+    client.on(events.ROOM_LEFT, (data: any) => {
+      console.log('-------ROOM_LEFT------', data);
+    });
+
     // client.on(events.PARTICIPANT_REMOVED || 'participantRemoved', ({ participant }: { participant: any }) => {
     //   console.log('Participant left:', participant.userId);
     //   setParticipants(prev => {
@@ -369,25 +373,16 @@ const VideoMeeting: React.FC = () => {
 
   // Toggle microphone
   const handleToggleMicrophone = async () => {
-    const localParticipant = currentRoom?.localParticipant;
-    await localParticipant?.toggleMicrophone();
-    setIsMicEnabled(!!localParticipant?.isAudioEnabled);
+    const p = participants.get(userId);
+    await p?.toggleMicrophone();
+    setIsMicEnabled(!!p?.isAudioEnabled);
   };
 
   // Toggle camera
   const handleToggleCamera = async () => {
-    if (!clientRef.current || !isInRoom) return;
-
-    try {
-      if (isVideoEnabled) {
-        await clientRef.current.disableVideo();
-      } else {
-        await clientRef.current.enableVideo();
-      }
-      setIsVideoEnabled(!isVideoEnabled);
-    } catch (error) {
-      console.error('Failed to toggle camera:', error);
-    }
+    const p = participants.get(userId);
+    await p?.toggleCamera();
+    setIsVideoEnabled(!!p?.isVideoEnabled);
   };
 
   // Leave room

@@ -530,6 +530,8 @@ class ErmisClient extends EventEmitter {
       "localStreamReady",
       "remoteStreamReady",
       "streamRemoved",
+      "audioToggled",
+      "videoToggled",
       "error",
     ];
 
